@@ -1,0 +1,12 @@
+.venv/
+.data/
+.pytest_cache/
+__pycache__/
+*.log
+*.pid
+.env
+ngrok.yml
+.env.*
+*.sqlite3*
+*.db
+.DS_Store
