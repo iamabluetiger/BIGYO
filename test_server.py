@@ -90,31 +90,42 @@ def test_bonus_uses_server_time_and_no_extension(client):
     assert vote(client, "study1").json()["state"]["votes"]["study1"]["reward"] == 20
 
 
-def test_withdrawal_retries_and_atomic_balance(client):
-    start(client)
+@pytest.mark.parametrize("path", ["/api/withdrawals", "/api/demo/withdrawals"])
+def test_withdrawal_unavailable_preserves_state(client, path):
+    before = start(client)
     body = {"amount": 700, "request_id": "test-request-000001"}
-    r = client.post("/api/withdrawals", json=body)
-    assert r.status_code == 200 and r.json()["state"]["balance"] == 300
-    assert r.json()["withdrawal"]["status"] == "received"
-    assert client.post("/api/withdrawals", json=body).json()["withdrawal"] == r.json()["withdrawal"]
-    assert client.post("/api/withdrawals", json={**body, "amount": 500}).status_code == 409
-    assert client.post("/api/withdrawals", json={"amount": 500, "request_id": "test-request-000002"}).status_code == 409
-    assert client.post("/api/withdrawals", json={**body, "amount": 1.5}).status_code == 422
+    for payload in (body, body, {**body, "amount": 500}, {}):
+        response = client.post(path, json=payload)
+        assert response.status_code == 501
+        assert response.json() == {"detail": "출금 신청은 추후 지원 예정입니다."}
+    after = client.get("/api/state").json()
+    assert {k: v for k, v in before.items() if k != "serverNow"} == {
+        k: v for k, v in after.items() if k != "serverNow"}
+    with sqlite3.connect(client.db_path) as db:
+        assert db.execute("SELECT COUNT(*) FROM withdrawals").fetchone()[0] == 0
+        assert db.execute("SELECT COUNT(*) FROM ledger").fetchone()[0] == 1
 
 
-def test_concurrent_withdrawals_never_overdraw(client):
+def test_concurrent_withdrawals_do_not_deduct(client):
     start(client)
     with ThreadPoolExecutor(max_workers=4) as pool:
         responses = list(pool.map(lambda i: client.post("/api/withdrawals", json={
             "amount": 700, "request_id": f"concurrent-request-{i}"}), range(4)))
-    assert sorted(r.status_code for r in responses) == [200, 409, 409, 409]
-    assert client.get("/api/state").json()["balance"] == 300
+    assert all(r.status_code == 501 for r in responses)
+    state = client.get("/api/state").json()
+    assert state["balance"] == 1000 and state["withdrawals"] == []
 
 
 def test_leaderboard_excludes_welcome_and_ignores_withdrawals(client):
-    start(client)
+    uid = start(client)["userId"]
     vote(client)
+    with sqlite3.connect(client.db_path) as db:
+        db.execute("INSERT INTO withdrawals VALUES (?,?,?,?,?)", ("old-withdrawal", uid, "rank-withdraw-001", 500, 1))
+        db.execute("INSERT INTO ledger(user_id,kind,reference,amount,at) VALUES (?,'withdrawal',?,-500,1)", (uid, "old-withdrawal"))
     client.post("/api/withdrawals", json={"amount": 500, "request_id": "rank-withdraw-001"})
+    state = client.get("/api/state").json()
+    assert state["balance"] == 520
+    assert state["withdrawals"] == [{"id": "old-withdrawal", "amount": 500, "at": 1, "status": "received"}]
     rows = client.get("/api/leaderboard").json()["rows"]
     assert len(rows) == 1 and rows[0]["points"] == 20 and rows[0]["me"]
 

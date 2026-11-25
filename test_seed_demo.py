@@ -11,9 +11,11 @@ HEADERS = {"X-Bigyo-Client": "web"}
 def test_seed_covers_cards_keeps_real_data_and_is_idempotent(tmp_path):
     path = tmp_path / "seed.sqlite3"
     with TestClient(create_app(path), headers=HEADERS) as client:
-        client.post("/api/session")
+        uid = client.post("/api/session").json()["userId"]
         client.post("/api/votes", json={"question_id": "commute1", "choice": "A"})
-        client.post("/api/withdrawals", json={"amount": 500, "request_id": "seed-test-existing-user"})
+        with sqlite3.connect(path) as db:
+            db.execute("INSERT INTO withdrawals VALUES (?,?,?,?,?)", ("old-withdrawal", uid, "seed-test-existing-user", 500, 1))
+            db.execute("INSERT INTO ledger(user_id,kind,reference,amount,at) VALUES (?,'withdrawal',?,-500,1)", (uid, "old-withdrawal"))
         before = client.get("/api/state").json()
         result = seed_demo_users(path)
         assert result["addedUsers"] == 20

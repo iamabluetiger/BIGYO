@@ -69,11 +69,6 @@ class SkipInput(Input):
     question_id: str = Field(max_length=100)
 
 
-class WithdrawalInput(Input):
-    amount: int = Field(ge=500, le=1_000_000, strict=True)
-    request_id: str = Field(pattern=r"^[a-zA-Z0-9-]{16,80}$")
-
-
 def create_app(db_path=None):
     db_path = Path(db_path or os.environ.get("BIGYO_DB", ROOT / ".data" / "bigyo.sqlite3"))
     questions = load_questions()
@@ -279,23 +274,8 @@ def create_app(db_path=None):
 
     @app.post("/api/withdrawals", dependencies=[Depends(web_client)])
     @app.post("/api/demo/withdrawals", dependencies=[Depends(web_client)])
-    def withdraw(body: WithdrawalInput, uid=Depends(user_id)):
-        with database(True) as db:
-            old = db.execute("SELECT id,amount,at,'received' AS status FROM withdrawals WHERE user_id=? AND request_id=?",
-                             (uid, body.request_id)).fetchone()
-            if old and old["amount"] != body.amount:
-                raise HTTPException(409, "같은 신청 번호의 금액을 바꿀 수 없어요.")
-            if old:
-                withdrawal = dict(old)
-            else:
-                if body.amount > balance(db, uid):
-                    raise HTTPException(409, "잔액이 부족해요. 지갑을 다시 확인해 주세요.")
-                withdrawal = {"id": "request-" + secrets.token_hex(12), "amount": body.amount, "at": now_ms(), "status": "received"}
-                db.execute("INSERT INTO withdrawals VALUES (?,?,?,?,?)",
-                           (withdrawal["id"], uid, body.request_id, body.amount, withdrawal["at"]))
-                db.execute("INSERT INTO ledger(user_id,kind,reference,amount,at) VALUES (?,'withdrawal',?,?,?)",
-                           (uid, withdrawal["id"], -body.amount, withdrawal["at"]))
-            return {"state": snapshot(db, uid), "withdrawal": withdrawal}
+    def withdraw(uid=Depends(user_id)):
+        raise HTTPException(501, "출금 신청은 추후 지원 예정입니다.")
 
     @app.get("/api/leaderboard")
     def leaderboard(uid=Depends(user_id)):
